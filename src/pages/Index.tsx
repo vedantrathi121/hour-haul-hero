@@ -184,7 +184,7 @@ const Index = () => {
         {/* Header */}
         <header className="text-center space-y-2 animate-slide-up">
           <h1 className="text-4xl md:text-5xl font-bold bg-gradient-primary bg-clip-text text-transparent">
-            Weekly 45-Hour Tracker
+            Weekly Tracker
           </h1>
           <p className="text-muted-foreground">Track your progress toward your weekly goal</p>
         </header>
