@@ -1,21 +1,30 @@
 import { useEffect, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
-import { Clock, Target, Calendar, Undo2, CheckCircle2, AlertCircle } from "lucide-react";
+import { Clock, Target, Calendar, CheckCircle2, AlertCircle, Play, Square, Timer } from "lucide-react";
+
+interface WorkSession {
+  startTime: string;
+  endTime: string;
+  duration: number; // in minutes
+}
 
 interface DailyEntry {
   date: string;
-  hours: number;
-  minutes: number;
+  displayDate: string;
+  sessions: WorkSession[];
+  totalMinutes: number;
 }
 
 interface WeekData {
   totalMinutes: number;
   entries: DailyEntry[];
   lastResetDate: string;
+  activeSession?: {
+    startTime: string;
+  };
 }
 
 const WEEKLY_TARGET_MINUTES = 45 * 60; // 45 hours in minutes
@@ -28,8 +37,23 @@ const Index = () => {
     entries: [],
     lastResetDate: new Date().toISOString(),
   });
-  const [hours, setHours] = useState("");
-  const [minutes, setMinutes] = useState("");
+  const [currentTime, setCurrentTime] = useState(new Date());
+  const [elapsedMinutes, setElapsedMinutes] = useState(0);
+
+  // Update current time and elapsed time every second
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTime(new Date());
+      
+      if (weekData.activeSession) {
+        const start = new Date(weekData.activeSession.startTime);
+        const elapsed = Math.floor((Date.now() - start.getTime()) / 60000);
+        setElapsedMinutes(elapsed);
+      }
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [weekData.activeSession]);
 
   // Load data from localStorage and check for Monday reset
   useEffect(() => {
@@ -76,60 +100,83 @@ const Index = () => {
     return `${hrs}h ${mins}m`;
   };
 
-  const handleLogHours = () => {
-    const hoursNum = parseFloat(hours) || 0;
-    const minutesNum = parseFloat(minutes) || 0;
-    const totalMinutesLogged = hoursNum * 60 + minutesNum;
+  const handleStartWork = () => {
+    const now = new Date();
+    
+    setWeekData(prev => ({
+      ...prev,
+      activeSession: {
+        startTime: now.toISOString(),
+      },
+    }));
 
-    if (totalMinutesLogged <= 0) {
-      toast.error("Please enter valid hours and minutes.");
+    toast.success("Clocked in! Work session started.", {
+      description: `Started at ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`,
+    });
+  };
+
+  const handleEndWork = () => {
+    if (!weekData.activeSession) return;
+
+    const now = new Date();
+    const start = new Date(weekData.activeSession.startTime);
+    const durationMinutes = Math.floor((now.getTime() - start.getTime()) / 60000);
+
+    if (durationMinutes < 1) {
+      toast.error("Session too short. Must be at least 1 minute.");
       return;
     }
 
-    if (totalMinutesLogged < DAILY_MINIMUM_MINUTES) {
-      toast.error(`Minimum daily requirement is 6 hours (${formatTime(DAILY_MINIMUM_MINUTES)})`);
-      return;
-    }
-
-    const newEntry: DailyEntry = {
-      date: new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }),
-      hours: hoursNum,
-      minutes: minutesNum,
+    const session: WorkSession = {
+      startTime: weekData.activeSession.startTime,
+      endTime: now.toISOString(),
+      duration: durationMinutes,
     };
 
-    setWeekData(prev => ({
-      ...prev,
-      totalMinutes: prev.totalMinutes + totalMinutesLogged,
-      entries: [...prev.entries, newEntry],
-    }));
+    const today = now.toLocaleDateString('en-US', { year: 'numeric', month: 'numeric', day: 'numeric' });
+    const todayDisplay = now.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+    
+    setWeekData(prev => {
+      const existingEntryIndex = prev.entries.findIndex(e => e.date === today);
+      let newEntries = [...prev.entries];
 
-    setHours("");
-    setMinutes("");
-    toast.success(`Logged ${formatTime(totalMinutesLogged)} successfully!`);
+      if (existingEntryIndex >= 0) {
+        // Update existing day
+        newEntries[existingEntryIndex] = {
+          ...newEntries[existingEntryIndex],
+          sessions: [...newEntries[existingEntryIndex].sessions, session],
+          totalMinutes: newEntries[existingEntryIndex].totalMinutes + durationMinutes,
+        };
+      } else {
+        // Create new day entry
+        newEntries.push({
+          date: today,
+          displayDate: todayDisplay,
+          sessions: [session],
+          totalMinutes: durationMinutes,
+        });
+      }
+
+      return {
+        ...prev,
+        totalMinutes: prev.totalMinutes + durationMinutes,
+        entries: newEntries,
+        activeSession: undefined,
+      };
+    });
+
+    setElapsedMinutes(0);
+    toast.success(`Session ended! Logged ${formatTime(durationMinutes)}`, {
+      description: `${start.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })} - ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`,
+    });
   };
 
-  const handleUndo = () => {
-    if (weekData.entries.length === 0) {
-      toast.error("No entries to undo.");
-      return;
-    }
-
-    const lastEntry = weekData.entries[weekData.entries.length - 1];
-    const minutesToRemove = lastEntry.hours * 60 + lastEntry.minutes;
-
-    setWeekData(prev => ({
-      ...prev,
-      totalMinutes: Math.max(0, prev.totalMinutes - minutesToRemove),
-      entries: prev.entries.slice(0, -1),
-    }));
-
-    toast.info(`Undone entry: ${formatTime(minutesToRemove)}`);
-  };
-
-  const remainingMinutes = Math.max(0, WEEKLY_TARGET_MINUTES - weekData.totalMinutes);
-  const progressPercentage = Math.min(100, (weekData.totalMinutes / WEEKLY_TARGET_MINUTES) * 100);
-  const isComplete = weekData.totalMinutes >= WEEKLY_TARGET_MINUTES;
-  const extraMinutes = Math.max(0, weekData.totalMinutes - WEEKLY_TARGET_MINUTES);
+  const totalWithActive = weekData.totalMinutes + (weekData.activeSession ? elapsedMinutes : 0);
+  const remainingMinutes = Math.max(0, WEEKLY_TARGET_MINUTES - totalWithActive);
+  const progressPercentage = Math.min(100, (totalWithActive / WEEKLY_TARGET_MINUTES) * 100);
+  const isComplete = totalWithActive >= WEEKLY_TARGET_MINUTES;
+  const extraMinutes = Math.max(0, totalWithActive - WEEKLY_TARGET_MINUTES);
+  const isClockedIn = !!weekData.activeSession;
 
   return (
     <div className="min-h-screen bg-background p-4 md:p-8">
@@ -151,7 +198,12 @@ const Index = () => {
               </div>
               <div className="flex-1">
                 <p className="text-sm text-muted-foreground">Current Total</p>
-                <p className="text-2xl font-bold text-foreground">{formatTime(weekData.totalMinutes)}</p>
+                <p className="text-2xl font-bold text-foreground">{formatTime(totalWithActive)}</p>
+                {isClockedIn && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    +{formatTime(elapsedMinutes)} active
+                  </p>
+                )}
               </div>
             </div>
           </Card>
@@ -213,90 +265,144 @@ const Index = () => {
           </div>
         </Card>
 
-        {/* Log Hours Section */}
+        {/* Clock In/Out Section */}
         <Card className="p-6 shadow-card border-border/50 animate-slide-up" style={{ animationDelay: "0.3s" }}>
-          <h2 className="text-lg font-semibold mb-4">Log Today's Hours</h2>
-          <div className="flex flex-col sm:flex-row gap-3">
-            <div className="flex-1">
-              <label htmlFor="hours" className="text-sm text-muted-foreground mb-1 block">
-                Hours
-              </label>
-              <Input
-                id="hours"
-                type="number"
-                placeholder="8"
-                value={hours}
-                onChange={(e) => setHours(e.target.value)}
-                min="0"
-                step="0.5"
-                className="border-border"
-              />
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold">Time Tracking</h2>
+              {isClockedIn && (
+                <div className="flex items-center gap-2 text-success">
+                  <div className="h-2 w-2 rounded-full bg-success animate-pulse" />
+                  <span className="text-sm font-medium">Active Session</span>
+                </div>
+              )}
             </div>
-            <div className="flex-1">
-              <label htmlFor="minutes" className="text-sm text-muted-foreground mb-1 block">
-                Minutes
-              </label>
-              <Input
-                id="minutes"
-                type="number"
-                placeholder="30"
-                value={minutes}
-                onChange={(e) => setMinutes(e.target.value)}
-                min="0"
-                max="59"
-                step="15"
-                className="border-border"
-              />
+
+            {/* Status Display */}
+            <div className={`p-4 rounded-lg border ${isClockedIn ? 'bg-success/5 border-success/20' : 'bg-muted/30 border-border/50'}`}>
+              {isClockedIn ? (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-success">
+                    <Timer className="h-5 w-5" />
+                    <span className="font-semibold">Clocked In</span>
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    Started at {new Date(weekData.activeSession!.startTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                  </p>
+                  <div className="text-2xl font-bold text-foreground">
+                    {formatTime(elapsedMinutes)}
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <CheckCircle2 className="h-5 w-5" />
+                  <span className="font-medium">Clocked Out. Ready to start your next session.</span>
+                </div>
+              )}
             </div>
-            <div className="flex items-end">
-              <Button
-                onClick={handleLogHours}
-                className="w-full sm:w-auto bg-gradient-primary hover:opacity-90 transition-opacity"
-              >
-                Log Hours
-              </Button>
+
+            {/* Action Buttons */}
+            <div className="flex gap-3">
+              {!isClockedIn ? (
+                <Button
+                  onClick={handleStartWork}
+                  className="flex-1 bg-success hover:bg-success/90 text-success-foreground"
+                  size="lg"
+                >
+                  <Play className="h-5 w-5 mr-2" />
+                  Start Work
+                </Button>
+              ) : (
+                <Button
+                  onClick={handleEndWork}
+                  className="flex-1 bg-destructive hover:bg-destructive/90 text-destructive-foreground"
+                  size="lg"
+                >
+                  <Square className="h-5 w-5 mr-2" />
+                  End Work
+                </Button>
+              )}
             </div>
+
+            <p className="text-xs text-muted-foreground text-center">
+              Daily minimum requirement: 6 hours · Weekly target: 45 hours
+            </p>
           </div>
-          <p className="text-xs text-muted-foreground mt-3">
-            Minimum daily requirement: 6 hours
-          </p>
         </Card>
 
         {/* Weekly Log */}
         <Card className="p-6 shadow-card border-border/50 animate-slide-up" style={{ animationDelay: "0.4s" }}>
-          <div className="flex items-center justify-between mb-4">
+          <div className="mb-4">
             <h2 className="text-lg font-semibold">Weekly Log</h2>
-            {weekData.entries.length > 0 && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleUndo}
-                className="border-border hover:bg-muted"
-              >
-                <Undo2 className="h-4 w-4 mr-2" />
-                Undo Last
-              </Button>
-            )}
           </div>
 
-          {weekData.entries.length === 0 ? (
+          {weekData.entries.length === 0 && !isClockedIn ? (
             <div className="text-center py-8 text-muted-foreground">
               <Calendar className="h-12 w-12 mx-auto mb-3 opacity-50" />
-              <p>No entries yet. Start logging your hours!</p>
+              <p>No entries yet. Click "Start Work" to begin tracking!</p>
             </div>
           ) : (
-            <div className="space-y-2">
-              {weekData.entries.map((entry, index) => (
+            <div className="space-y-4">
+              {weekData.entries.map((entry, dayIndex) => (
                 <div
-                  key={index}
-                  className="flex items-center justify-between p-3 rounded-lg bg-muted/30 border border-border/50 hover:bg-muted/50 transition-colors"
+                  key={dayIndex}
+                  className="p-4 rounded-lg bg-muted/30 border border-border/50 space-y-3"
                 >
-                  <span className="text-sm font-medium">{entry.date}</span>
-                  <span className="text-sm text-muted-foreground">
-                    {formatTime(entry.hours * 60 + entry.minutes)}
-                  </span>
+                  <div className="flex items-center justify-between pb-2 border-b border-border/50">
+                    <span className="font-semibold text-foreground">{entry.displayDate}</span>
+                    <span className={`text-sm font-medium ${entry.totalMinutes >= DAILY_MINIMUM_MINUTES ? 'text-success' : 'text-warning'}`}>
+                      {formatTime(entry.totalMinutes)}
+                      {entry.totalMinutes < DAILY_MINIMUM_MINUTES && ' ⚠️'}
+                    </span>
+                  </div>
+                  
+                  <div className="space-y-2">
+                    {entry.sessions.map((session, sessionIndex) => {
+                      const start = new Date(session.startTime);
+                      const end = new Date(session.endTime);
+                      return (
+                        <div
+                          key={sessionIndex}
+                          className="flex items-center justify-between text-sm pl-3"
+                        >
+                          <span className="text-muted-foreground">
+                            {start.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })} - {end.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                          <span className="text-foreground font-medium">
+                            {formatTime(session.duration)}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               ))}
+
+              {/* Show current active session in the log */}
+              {isClockedIn && (
+                <div className="p-4 rounded-lg bg-success/5 border border-success/20 space-y-3">
+                  <div className="flex items-center justify-between pb-2 border-b border-success/20">
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-foreground">
+                        {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}
+                      </span>
+                      <span className="text-xs text-success font-medium">(Active)</span>
+                    </div>
+                    <span className="text-sm font-medium text-success">
+                      {formatTime(elapsedMinutes)}
+                    </span>
+                  </div>
+                  
+                  <div className="flex items-center justify-between text-sm pl-3">
+                    <span className="text-muted-foreground">
+                      {new Date(weekData.activeSession!.startTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })} - Now
+                    </span>
+                    <span className="text-success font-medium animate-pulse">
+                      Recording...
+                    </span>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </Card>
